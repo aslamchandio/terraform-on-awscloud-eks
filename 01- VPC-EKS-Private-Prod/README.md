@@ -25,60 +25,68 @@
 - [Terraform AWS VPC Module](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/latest)
 ```t
 # Create VPC Terraform Module
+
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "2.78.0"
+  version = "5.2.0"
+  
+  # insert the 21 required variables here
 
   # VPC Basic Details
-  name = "vpc-dev"
-  cidr = "10.0.0.0/16"   
-  azs                 = ["us-east-1a", "us-east-1b"]
-  private_subnets     = ["10.0.1.0/24", "10.0.2.0/24"]
-  public_subnets      = ["10.0.101.0/24", "10.0.102.0/24"]
+  #name = "${local.name}-${var.vpc_name}"
+  name     = "${local.name}-${var.cluster_name}-vpc"
+  cidr = var.vpc_cidr_block
+
+  azs                 = ["us-east-1a", "us-east-1b", "us-east-1d"]
+  public_subnets  = var.vpc_public_subnets
+  private_subnets = var.vpc_private_subnets  
 
   # Database Subnets
-  create_database_subnet_group = true
-  create_database_subnet_route_table= true
-  database_subnets    = ["10.0.151.0/24", "10.0.152.0/24"]
-
-  #create_database_nat_gateway_route = true
-  #create_database_internet_gateway_route = true
+  database_subnets = var.vpc_database_subnets
+  create_database_subnet_group = var.vpc_create_database_subnet_group
+  create_database_subnet_route_table = var.vpc_create_database_subnet_route_table
+  # create_database_internet_gateway_route = true
+  # create_database_nat_gateway_route = true
 
   # NAT Gateways - Outbound Communication
-  enable_nat_gateway = true
-  single_nat_gateway = true
+  enable_nat_gateway = var.vpc_enable_nat_gateway 
+  single_nat_gateway = var.vpc_single_nat_gateway
 
   # VPC DNS Parameters
   enable_dns_hostnames = true
   enable_dns_support = true
+  
 
+  # Additional Tags to Subnets
   public_subnet_tags = {
-    Type = "public-subnets"
+     Type = "Public Subnets"
+    "kubernetes.io/role/elb" = 1    
+    "kubernetes.io/cluster/${local.eks_cluster_name}" = "shared"          
   }
-
   private_subnet_tags = {
     Type = "private-subnets"
+    "kubernetes.io/role/internal-elb" = 1    
+    "kubernetes.io/cluster/${local.eks_cluster_name}" = "shared"      
   }
 
   database_subnet_tags = {
     Type = "database-subnets"
   }
 
-  tags = {
-    Owner = "kalyan"
+    tags = {
+    Owner = "Aslam"
     Environment = "dev"
   }
-
-  vpc_tags = {
-    Name = "vpc-dev"
-  }
+ # Instances launched into the Public subnet should be assigned a public IP address.
+  map_public_ip_on_launch = true
 }
+
 ```
 
 ## Step-03: Execute Terraform Commands
 ```t
 # Working Folder
-terraform-manifests/v1-vpc-module
+terraform-manifests/
 
 # Terraform Initialize
 terraform init
@@ -124,12 +132,14 @@ rm -rf terraform.tfstate*
 - c2-generic-variables.tf
 ```t
 # Input Variables
+
 # AWS Region
 variable "aws_region" {
   description = "Region in which AWS Resources to be created"
   type = string
   default = "us-east-1"  
 }
+
 # Environment Variable
 variable "environment" {
   description = "Environment Variable used as a prefix"
@@ -140,8 +150,9 @@ variable "environment" {
 variable "business_divsion" {
   description = "Business Division in the large organization this Infrastructure belongs"
   type = string
-  default = "HR"
+  default = "it"
 }
+
 ```
 
 ## Step-06: c3-local-values.tf
@@ -156,6 +167,9 @@ locals {
     owners = local.owners
     environment = local.environment     
   }
+# Add additional local value
+  eks_cluster_name = "${local.name}-${var.cluster_name}"  
+
 }
 ```
 
@@ -174,35 +188,37 @@ variable "vpc_name" {
 variable "vpc_cidr_block" {
   description = "VPC CIDR Block"
   type = string 
-  default = "10.0.0.0/16"
+  default = "192.168.0.0/16"
 }
 
 # VPC Availability Zones
+/*
 variable "vpc_availability_zones" {
   description = "VPC Availability Zones"
   type = list(string)
   default = ["us-east-1a", "us-east-1b"]
 }
+*/
 
 # VPC Public Subnets
 variable "vpc_public_subnets" {
   description = "VPC Public Subnets"
   type = list(string)
-  default = ["10.0.101.0/24", "10.0.102.0/24"]
+  default = ["192.168.1.0/24", "192.168.3.0/24", "192.168.3.0/24"]
 }
 
 # VPC Private Subnets
 variable "vpc_private_subnets" {
   description = "VPC Private Subnets"
   type = list(string)
-  default = ["10.0.1.0/24", "10.0.2.0/24"]
+  default = ["192.168.2.0/24", "192.168.4.0/24", "192.168.6.0/24"]
 }
 
 # VPC Database Subnets
 variable "vpc_database_subnets" {
   description = "VPC Database Subnets"
   type = list(string)
-  default = ["10.0.151.0/24", "10.0.152.0/24"]
+  default = ["192.168.11.0/24", "192.168.12.0/24", "192.168.13.0/24"]
 }
 
 # VPC Create Database Subnet Group (True / False)
@@ -281,7 +297,207 @@ module "vpc" {
   }
 }
 ```
-## Step-09: c4-03-vpc-outputs.tf
+## Step-9: c4-03-vpc-sg.tf
+```t
+# Resource: Security Group
+resource "aws_security_group" "public_sg" {
+  name        = "public_sg"
+  description = "Public SG"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    
+      description = "Allow for Linux Bastion Host"
+      from_port        = 22
+      to_port          = 22
+      protocol         = "tcp"
+      cidr_blocks      = ["39.51.7.206/32"]
+    }
+
+   ingress {
+    
+      description = "Allow for Windows Bastion Host"
+      from_port        = 3389
+      to_port          = 3389
+      protocol         = "tcp"
+      cidr_blocks      = ["39.51.7.206/32"]
+    } 
+
+     ingress {
+    
+      description = "Allow for Windows Bastion Host"
+      from_port        = 80
+      to_port          = 80
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+    } 
+
+     ingress {
+    
+      description = "Allow for Windows Bastion Host"
+      from_port        = 8080
+      to_port          = 8080
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+    } 
+ 
+  egress { 
+     
+      description = "Outbound Allowed"
+      from_port        = 0
+      to_port          = 0
+      protocol         = "-1"
+      cidr_blocks      = ["0.0.0.0/0"]
+      
+  }
+
+    tags = {
+    Name = "${local.name}-public_sg"
+  }
+}
+
+# Resource: Security Group
+resource "aws_security_group" "private_sg" {
+  name        = "private_sg"
+  description = "Private SG"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    
+      description = "Allow for Linux Bastion Host"
+      from_port        = 22
+      to_port          = 22
+      protocol         = "tcp"
+      cidr_blocks      = ["192.168.0.0/16"]
+    }
+
+   ingress {
+    
+      description = "Allow for Windows Bastion Host"
+      from_port        = 3306
+      to_port          = 3306
+      protocol         = "tcp"
+      cidr_blocks      = ["192.168.0.0/16"]
+    } 
+ 
+  egress { 
+     
+      description = "Outbound Allowed"
+      from_port        = 0
+      to_port          = 0
+      protocol         = "-1"
+      cidr_blocks      = ["0.0.0.0/0"]
+      
+  }
+
+    tags = {
+    Name = "${local.name}-private_sg"
+  }
+}
+
+resource "aws_security_group" "control_plan_sg" {
+  name        = "controlplan_sg"
+  description = "Control PLan SG"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    
+      description = "Allow for API-Server"
+      from_port        = 6443
+      to_port          = 6443
+      protocol         = "tcp"
+      cidr_blocks      = ["192.168.0.0/16"]
+    }
+
+   ingress {
+    
+      description = "Allow for ETCD Database"
+      from_port        = 2379
+      to_port          = 2380
+      protocol         = "tcp"
+      cidr_blocks      = ["192.168.0.0/16"]
+    } 
+
+    ingress {
+    
+      description = "Allow for Kubelet-Scheduler-ControlManager"
+      from_port        = 10250
+      to_port          = 10252
+      protocol         = "tcp"
+      cidr_blocks      = ["192.168.0.0/16"]
+    } 
+  
+
+  egress { 
+     
+      description = "Outbound Allowed"
+      from_port        = 0
+      to_port          = 0
+      protocol         = "-1"
+      cidr_blocks      = ["0.0.0.0/0"]
+      
+    }
+  
+
+  tags = {
+    Name = "${local.name}-controlplan_sg"
+  }
+}
+
+
+resource "aws_security_group" "worker_node_sg" {
+  name        = "workernode-sg"
+  description = "Worker Node SG"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    
+      description = "SSH into Worker Node"
+      from_port        = 22
+      to_port          = 22
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+    }
+
+  ingress {
+    
+      description = "Allow Kubelet"
+      from_port        = 10250
+      to_port          = 10250
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+    }
+
+  ingress {
+    
+      description = "Allow for Services"
+      from_port        = 30000
+      to_port          = 32767
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+    }  
+
+
+
+  egress { 
+     
+      description = "Outbound Allowed"
+      from_port        = 0
+      to_port          = 0
+      protocol         = "-1"
+      cidr_blocks      = ["0.0.0.0/0"]
+      
+    }
+  
+
+  tags = {
+    Name = "${local.name}-workernode-sg"
+  }
+}
+
+```
+
+## Step-10: c4-04-vpc-outputs.tf
 ```t
 # VPC Output Values
 
@@ -309,6 +525,12 @@ output "public_subnets" {
   value       = module.vpc.public_subnets
 }
 
+# VPC Database Subnets
+output "database_subnets" {
+  description = "List of IDs of Database subnets"
+  value       = module.vpc.database_subnets
+}
+
 # VPC NAT gateway Public IP
 output "nat_public_ips" {
   description = "List of public Elastic IPs created for AWS NAT Gateway"
@@ -320,24 +542,116 @@ output "azs" {
   description = "A list of availability zones spefified as argument to this module"
   value       = module.vpc.azs
 }
-```
-## Step-10: terraform.tfvars
-```t
-# Generic Variables
-aws_region = "us-east-1"  
-environment = "dev"
-business_divsion = "HR"
+
+output "public_sg" {
+  value = aws_security_group.public_sg.id
+}
+ 
+output "private_sg" {
+  value = aws_security_group.private_sg.id
+}
+
+output "control_plan_sg" {
+  value = aws_security_group.control_plan_sg.id
+}
+
+output "worker_node_sg" {
+  value = aws_security_group.worker_node_sg.id
+}
 ```
 
-## Step-11: vpc.auto.tfvars
+## Step-11: c5-01-ami-datasource.tf
+```t
+#Get latest Ubuntu Linux Jammy 22.04 AMI
+data "aws_ami" "ubuntulinux22" {
+  most_recent = true
+  owners = [ "099720109477" ]
+  filter {
+    name = "name"
+    values = [ "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" ]
+  }
+  filter {
+    name = "root-device-type"
+    values = [ "ebs" ]
+  }
+  filter {
+    name = "virtualization-type"
+    values = [ "hvm" ]
+  }
+  filter {
+    name = "architecture"
+    values = [ "x86_64" ]
+  }
+}
+
+```
+
+## Step-12: c5-02-ec2-instance.tf
+```t
+# AWS EC2 Instance Terraform Module
+# Bastion Host - EC2 Instance that will be created in VPC Public Subnet
+module "ec2_public" {
+  source  = "terraform-aws-modules/ec2-instance/aws"
+  version = "5.5.0"
+  # insert the 10 required variables here
+  name = "${local.name}-bastionhost"
+  ami = data.aws_ami.ubuntulinux22.id
+  instance_type = "t2.micro"
+  user_data = file("${path.module}/bastion.sh")
+  key_name = "AWSKey"
+  subnet_id = module.vpc.public_subnets[0]
+  associate_public_ip_address = true 
+  vpc_security_group_ids = [ aws_security_group.public_sg.id ]   
+  
+}
+
+```
+## Step-13: c5-03-ec2-outputs.tf
+```t
+# AWS EC2 Instance Terraform Outputs
+# Public EC2 Instances - Bastion Host
+output "ec2_public_instance_ids" {
+  description = "List of IDs of instances"
+  value       = module.ec2_public.id
+}
+output "ec2_public_ip" {
+  description = "List of Public ip address assigned to the instances"
+  value       = module.ec2_public.public_ip
+}
+
+```
+## Step-14: c6-eks-variables.tf
+```t
+# EKS Cluster Input Variables
+variable "cluster_name" {
+  description = "Name of the EKS cluster. Also used as a prefix in names of related resources."
+  type        = string
+  default     = "ekscluster1"
+}
+
+```
+## Step-15: eks-auto-tfvars
+```t
+cluster_name = "ekscluster1"
+
+```
+## Step-16: terraform.tfvars
+```t
+# Generic Variables
+aws_region = "us-east-1"   
+environment = "dev"
+business_divsion = "it"
+
+```
+## Step-17: vpc.auto.tfvars
 ```t
 # VPC Variables
 vpc_name = "myvpc"
-vpc_cidr_block = "10.0.0.0/16"
-vpc_availability_zones = ["us-east-1a", "us-east-1b"]
-vpc_public_subnets = ["10.0.101.0/24", "10.0.102.0/24"]
-vpc_private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
-vpc_database_subnets= ["10.0.151.0/24", "10.0.152.0/24"]
+vpc_cidr_block = "192.168.0.0/16"
+#vpc_availability_zones = ["us-east-1a", "us-east-1b", "us-east-1d"]
+vpc_public_subnets = ["192.168.1.0/24", "192.168.3.0/24", "192.168.5.0/24"]
+vpc_private_subnets = ["192.168.2.0/24", "192.168.4.0/24", "192.168.6.0/24"]
+vpc_database_subnets= ["192.168.11.0/24", "192.168.12.0/24", "192.168.13.0/24"]
 vpc_create_database_subnet_group = true 
 vpc_create_database_subnet_route_table = true   
 vpc_enable_nat_gateway = true  
@@ -345,7 +659,7 @@ vpc_single_nat_gateway = true
 ```
 
 
-## Step-12: Execute Terraform Commands
+## Step-18: Execute Terraform Commands
 ```t
 # Working Folder
 terraform-manifests/v2-vpc-module-standardized
@@ -373,7 +687,7 @@ Observation:
 9) Verify Tags
 ```
 
-## Step-13: Clean-Up
+## Step-19: Clean-Up
 ```t
 # Terraform Destroy
 terraform destroy -auto-approve
