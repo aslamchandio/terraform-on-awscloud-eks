@@ -591,9 +591,19 @@ vpc_create_database_subnet_route_table = true
 vpc_enable_nat_gateway = true  
 vpc_single_nat_gateway = true
 ```
+## Step-18: bastion.sh
+```t
+#!/bin/bash
+sudo apt update -y
+sudo apt upgrade -y
+sudo apt autoremove -y
+sudo hostnamectl set-hostname Bastion-Host
+sudo ufw allow proto tcp from any to any port 22,80,443
+sudo apt install zip unzip wget net-tools vim nano htop -y
+sudo echo 'y' | sudo ufw enable
 
-
-## Step-18: Execute Terraform Commands
+```
+## Step-19: Execute Terraform Commands
 ```t
 # Working Folder
 terraform-manifests
@@ -621,7 +631,7 @@ Observation:
 9) Verify Tags
 ```
 
-## Step-19: Clean-Up
+## Step-20: Clean-Up
 ```t
 # Terraform Destroy
 terraform destroy -auto-approve
