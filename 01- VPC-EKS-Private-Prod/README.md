@@ -62,7 +62,7 @@ $HOME/.aws/credentials
 */
 
 ```
-## Step-06: c3-local-values.tf
+## Step-05: c2-generic-variables.tf
 ```t
 
 # Input Variables
